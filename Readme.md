@@ -26,6 +26,13 @@ Depending which LLM backend you are using you will also need one of :
 - `GROQ_API_KEY`: If using groq
 - `CLAUDE_API_KEY`: if using anthropoic/claude
 
+## Cloning the repo
+
+```sh
+git clone https://github.com/ohnotnow/svic-o-tron.git
+cd svic-o-tron
+```
+
 ## Running the Script manually
 
 To run the bot:
