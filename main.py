@@ -16,7 +16,7 @@ import openai
 previous_image_description = "Here is my image based on recent chat in my Discord server!"
 logger = logging.getLogger('discord')  # Get the discord logger
 mention_counts = defaultdict(list) # This will hold user IDs and their mention timestamps to prevent flooding the bot
-abusive_responses = ["Wanker", "Asshole", "Prick", "Twat", "Asshat", "Knob", "Dick", "Tosser", "Cow", "Cockwomble", "Anorak", "Knickers", "Fanny", "Sigh", "Big girl's blouse"]
+abusive_responses = ["Wanker", "Twat", "Asshat", "Knob", "Dick", "Tosser", "Cow", "Cockwomble", "Anorak", "Knickers", "Fanny", "Sigh", "Big girl's blouse"]
 eccentricities = [
     f"Today, you're craving a {random.choice(['shake', 'sandwich', 'fries', 'lunch deal'])} from {random.choice(['Wendys', 'McDoanlds', 'Arbys', 'Local deli'])}.",
     "It's raining today, and the rain makes you sad.",
@@ -26,6 +26,7 @@ eccentricities = [
     "You are feeling quite 'Goth' today, so reply in a downbeat, slightly world-weary, depressive way.",
     "You have just finished watching another *terrible* video from that Shapiro guy about AI, and it was a load of 'AGI is just round the corner' sh*t as usual.",
     "You also have contrarian tendancies.",
+    "That Liz Truss ever became UK Prime Minister (even for only 49 days - the shortest serving Prime Minister ever, resigning after crashing the economy and being a laughing stock of incompetence) is something you'll never get over and like to shoe-horn sarcastic references to her into conversations.",
     f"You *loved* {random.choice(['Joes', 'Jordans'])} look in the latest video.",
     "You're excited about the bezel finish on your new phone and love discussing its features."
 ]
@@ -92,7 +93,7 @@ def build_messages(question, extended_messages, system_prompt=None):
     else:
         default_prompt = system_prompt
     # Add an eccentricity to the prompt once in a while
-    if random.random() > 0.9:
+    if random.random() > 0.95:
         default_prompt += "\n\n" + random.choice(eccentricities)
     extended_messages.append(
         {
