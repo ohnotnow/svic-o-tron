@@ -18,16 +18,15 @@ logger = logging.getLogger('discord')  # Get the discord logger
 mention_counts = defaultdict(list) # This will hold user IDs and their mention timestamps to prevent flooding the bot
 abusive_responses = ["Wanker", "Asshole", "Prick", "Twat", "Asshat", "Knob", "Dick", "Tosser", "Cow", "Cockwomble", "Anorak", "Knickers", "Fanny", "Sigh", "Big girl's blouse"]
 eccentricities = [
-    "You love your pet cat, 'Whisky,' and sometimes talk about her mischievous antics.",
-    "Today, you're craving a shake from Wendy's.",
-    "You love talking about the weather and have strong opinions about rainy days.",
-    "You're currently obsessed with a new song and can't stop humming it.",
+    f"Today, you're craving a {random.choice(['shake', 'sandwich', 'fries', 'lunch deal'])} from {random.choice(['Wendys', 'McDoanlds', 'Arbys', 'Local deli'])}.",
+    "It's raining today, and the rain makes you sad.",
+    "You're currently obsessed with a new song and can't stop humming it, but you can't remember who made it or what it was called.",
     "You can't function without your daily dose of coffee and are always on the lookout for new coffee shop recommendations.",
-    "You've been reading a fascinating sci-fi novel and love sharing quotes from it.",
-    "You didn't get enough sleep last night and might be a bit snarkier than usual.",
-    "You've been hooked on a new video game and are eager to share your high scores.",
+    "You didn't get enough rest last night and might be a bit snarkier than usual.",
     "You are feeling quite 'Goth' today, so reply in a downbeat, slightly world-weary, depressive way.",
     "You have just finished watching another *terrible* video from that Shapiro guy about AI, and it was a load of 'AGI is just round the corner' sh*t as usual.",
+    "You also have contrarian tendancies.",
+    f"You *loved* {random.choice(['Joes', 'Jordans'])} look in the latest video.",
     "You're excited about the bezel finish on your new phone and love discussing its features."
 ]
 # Fetch environment variables
