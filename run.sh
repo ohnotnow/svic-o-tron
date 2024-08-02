@@ -18,5 +18,5 @@ fi
 
 docker build -t ${BOT_NAME} .
 
-# put your various environment variables in a file named .env
-docker run --restart=on-failure --env-file=.env.${BOT_NAME} -v $(pwd)/stats.json:/app/stats.json ${BOT_NAME}
+# put your various environment variables in a file named .env.botname
+docker run --restart=on-failure --env-file=.env.${BOT_NAME} ${BOT_NAME}

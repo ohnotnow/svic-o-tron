@@ -65,7 +65,7 @@ async def get_text(message, url):
             trailing_text = url.replace(url_string, '').strip()
             if trailing_text:
                 prompt = trailing_text
-        if url_string.endswith('.pdf'):
+        if url_string.endswith('.pdf') or url_string.startswith('https://arxiv.org/pdf'):
             page_text = get_text_from_pdf(url_string)[:10000]
         else:
             downloaded = fetch_url(url_string)

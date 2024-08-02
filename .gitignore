@@ -2,4 +2,4 @@
 __pycache__*
 autogen.*
 .env.*
-
+!.env.example

@@ -6,7 +6,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone, time
 import pytz
-from gepetto import mistral, dalle, summary, gpt, stats, groq, claude, ollama
+from gepetto import bot_factory, guard, summary, dalle
 import discord
 from discord import File
 from discord.ext import commands, tasks
@@ -20,28 +20,22 @@ abusive_responses = ["Wanker", "Asshole", "Prick", "Twat", "Asshat", "Knob", "Di
 
 # Fetch environment variables
 server_id = os.getenv("DISCORD_SERVER_ID", "not_set")
-model_engine = os.getenv("OPENAI_MODEL_ENGINE", gpt.Model.GPT3_5_Turbo.value[0])
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Define which features are enabled
+enabled_features = [
+    "replies",
+    "summaries",
+    # "images",
+    # "chat_images",
+    # "random_chat",
+    # "horror_stories",
+    # "weather",
+]
 # Create instance of bot
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-def get_chatbot():
-    chatbot = None
-    if os.getenv("BOT_PROVIDER") == 'mistral':
-        chatbot = mistral.MistralModel()
-    elif os.getenv("BOT_PROVIDER") == 'groq':
-        chatbot = groq.GroqModel()
-    elif os.getenv("BOT_PROVIDER") == 'claude':
-        chatbot = claude.ClaudeModel()
-    elif os.getenv("BOT_PROVIDER") == 'ollama':
-        chatbot = ollama.OllamaModel()
-    else:
-        chatbot = gpt.GPTModel()
-    return chatbot
 
 def remove_nsfw_words(message):
     message = re.sub(r"(fuck|prick|asshole|shit|wanker|dick)", "", message)
@@ -118,60 +112,14 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    # ignore direct messages
-    if message.guild is None:
+    message_ignored, abusive_reply = guard.should_block(message, bot, server_id)
+    if message_ignored:
+        if abusive_reply:
+            logger.info("Blocked message from: " + message.author.name + " and abusing them")
+            await message.channel.send(f"{random.choice(abusive_responses)}.")
         return
 
-    # Ignore messages not sent by our server
-    if str(message.guild.id) != server_id:
-        return
-
-    # Ignore messages sent by the bot itself
-    if message.author == bot.user:
-        return
-
-    # Ignore messages that don't mention anyone at all
-    if len(message.mentions) == 0:
-        return
-
-    # Bail out if the bot was not mentioned
-    if not (bot.user in message.mentions):
-        return
-
-    user_id = message.author.id
-    username = message.author.name
-    logger.info(f'Bot was mentioned by user {username} (ID: {user_id})')
-
-    # If the user is a bot then send an abusive response
-    if message.author.bot:
-        await message.channel.send(f"{random.choice(abusive_responses)}.")
-        return
-
-    # Current time
-    now = datetime.utcnow()
-
-    # Add the current time to the user's list of mention timestamps
-    mention_counts[user_id].append(now)
-    # Remove mentions that were more than an hour ago
-    mention_counts[user_id] = [time for time in mention_counts[user_id] if now - time <= timedelta(hours=1)]
-    # If the user has mentioned the bot more than 10 times recently
-    if len(mention_counts[user_id]) > 10:
-        # Send an abusive response
-        await message.reply(f"{message.author.mention} {random.choice(abusive_responses)}.")
-        return
-
-    # If the message is just a mention, send an abusive response
-    if len(message.content.split(' ', 1)) == 1:
-        await message.reply(f"{message.author.mention} {random.choice(abusive_responses)}.")
-        return
-
-    # If the message is just punctuation or whatever, send an abusive response
     question = message.content.split(' ', 1)[1][:500].replace('\r', ' ').replace('\n', ' ')
-    logger.info(f'Question: {question}')
-    if not any(char.isalpha() for char in question):
-        await message.channel.send(f'{message.author.mention} {random.choice(abusive_responses)}.')
-        return
-
     if "--strict" in question.lower():
         question = question.lower().replace("--strict", "")
         temperature = 0.1
@@ -190,9 +138,11 @@ async def on_message(message):
     try:
         lq = question.lower().strip()
         if lq.startswith("create an image") or lq.startswith("📷") or lq.startswith("🖌️") or lq.startswith("🖼️"):
+            if not "images" in enabled_features:
+                await message.channel.send(f'{message.author.mention} I can\'t do that, Dave.', mention_author=True)
+                return
             async with message.channel.typing():
                 base64_image = await dalle.generate_image(question)
-            stats.update(message.author.id, message.author.name, 0, 0.04)
             await message.reply(f'{message.author.mention}\n_[Estimated cost: US$0.04]_', file=base64_image, mention_author=True)
         elif re.search(pattern, lq):
             question = question.replace("👀", "")
@@ -204,7 +154,7 @@ async def on_message(message):
                 messages = [
                     {
                         'role': 'system',
-                        'content': 'You are a helpful assistant who specialises in providing concise, short summaries of text.'
+                        'content': 'You are a helpful assistant who specialises in providing concise, short summaries of text.  If the text looks like a failed attempt by the user to get the text, please ignore it explain that it looks like the content is not available to you.'
                     },
                     {
                         'role': 'user',
@@ -212,13 +162,8 @@ async def on_message(message):
                     },
                 ]
                 response = await chatbot.chat(messages, temperature=1.0)
-                stats.update(message.author.id, message.author.name, response.tokens, response.cost)
                 page_summary = response.message[:1900] + "\n" + response.usage
             await message.reply(f"Here's a summary of the content:\n{page_summary}")
-        elif question.lower().strip() == "stats":
-            statistics = stats.get_stats()
-            response = f"```json\n{json.dumps(statistics, indent=2)}\n```"
-            await message.reply(f'{message.author.mention} {response}', mention_author=True)
         else:
             async with message.channel.typing():
                 if "--no-logs" in question.lower():
@@ -237,7 +182,6 @@ async def on_message(message):
                 response_text = re.sub(r"Gepetto' said: ", '', response_text, flags=re.MULTILINE)
                 response_text = re.sub(r"Minxie' said: ", '', response_text, flags=re.MULTILINE)
                 response_text = re.sub(r"^.*At \d{4}-\d{2}.+said?", "", response_text, flags=re.MULTILINE)
-                stats.update(message.author.id, message.author.name, response.tokens, response.cost)
                 # make sure the message fits into discord's 2000 character limit
                 response = response_text.strip()[:1900] + "\n" + response.usage
             # send the response as a reply and mention the person who asked the question
@@ -248,6 +192,8 @@ async def on_message(message):
 
 @tasks.loop(minutes=60)
 async def random_chat():
+    if not "random_chat" in enabled_features:
+        return
     logger.info("In random_chat")
     if not isinstance(chatbot, gpt.GPTModel):
         logger.info("Not joining in with chat because we are using non-gpt")
@@ -278,6 +224,8 @@ async def random_chat():
 
 @tasks.loop(time=time(hour=17, tzinfo=pytz.timezone('Europe/London')))
 async def make_chat_image():
+    if not "chat_images" in enabled_features:
+        return
     global previous_image_description
     logger.info("In make_chat_image")
     if not isinstance(chatbot, gpt.GPTModel):
@@ -305,6 +253,14 @@ async def make_chat_image():
     previous_image_description = response.message
     await channel.send(f'{response.message}\n> {prompt}\n_[Estimated cost: US$0.05]_', file=discord_file)
 
-# Run the bot
-chatbot = get_chatbot()
+# Create the llm instance
+llm_provider = os.getenv("BOT_PROVIDER", "openai")
+llm_model = os.getenv("BOT_MODEL", "gpt-4o-mini")
+chatbot = bot_factory.get_bot(model=llm_model, vendor=llm_provider)
+chatbot.name = os.getenv("BOT_NAME", "Jenny")
+
+# Create the bot guard
+guard = guard.BotGuard()
+
+# And run the discord bot
 bot.run(os.getenv("DISCORD_BOT_TOKEN", 'not_set'))

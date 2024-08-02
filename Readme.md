@@ -18,6 +18,8 @@ The following environment variables are used:
 - `DISCORD_BOT_TOKEN`: Your Discord bot token
 - `DISCORD_SERVER_ID`: The ID of your Discord server
 - `BOT_PROVIDER`: The LLM API provider you're using (can be 'groq', 'openai', 'claude')
+- `BOT_MODEL`: The particular model to use by default (eg, 'gpt-4o-mini')
+- `BOT_NAME`: The name of the bot (single word)
 - `DISCORD_BOT_DEFAULT_PROMPT`: Your default system prompt (optional)
 
 Depending which LLM backend you are using you will also need one of :
