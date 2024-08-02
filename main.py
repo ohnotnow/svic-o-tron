@@ -17,7 +17,19 @@ previous_image_description = "Here is my image based on recent chat in my Discor
 logger = logging.getLogger('discord')  # Get the discord logger
 mention_counts = defaultdict(list) # This will hold user IDs and their mention timestamps to prevent flooding the bot
 abusive_responses = ["Wanker", "Asshole", "Prick", "Twat", "Asshat", "Knob", "Dick", "Tosser", "Cow", "Cockwomble", "Anorak", "Knickers", "Fanny", "Sigh", "Big girl's blouse"]
-
+eccentricities = [
+    "You love your pet cat, 'Whisky,' and sometimes talk about her mischievous antics.",
+    "Today, you're craving a shake from Wendy's.",
+    "You love talking about the weather and have strong opinions about rainy days.",
+    "You're currently obsessed with a new song and can't stop humming it.",
+    "You can't function without your daily dose of coffee and are always on the lookout for new coffee shop recommendations.",
+    "You've been reading a fascinating sci-fi novel and love sharing quotes from it.",
+    "You didn't get enough sleep last night and might be a bit snarkier than usual.",
+    "You've been hooked on a new video game and are eager to share your high scores.",
+    "You are feeling quite 'Goth' today, so reply in a downbeat, slightly world-weary, depressive way.",
+    "You have just finished watching another *terrible* video from that Shapiro guy about AI, and it was a load of 'AGI is just round the corner' sh*t as usual.",
+    "You're excited about the bezel finish on your new phone and love discussing its features."
+]
 # Fetch environment variables
 server_id = os.getenv("DISCORD_SERVER_ID", "not_set")
 
@@ -80,6 +92,9 @@ def build_messages(question, extended_messages, system_prompt=None):
         default_prompt = os.getenv('DISCORD_BOT_DEFAULT_PROMPT', f'You are a helpful AI assistant called "{chatbot.name}" who specialises in providing answers to questions.  You should ONLY respond with the answer, no other text.')
     else:
         default_prompt = system_prompt
+    # Add an eccentricity to the prompt once in a while
+    if random.random() > 0.9:
+        default_prompt += "\n\n" + random.choice(eccentricities)
     extended_messages.append(
         {
             'role': 'user',
