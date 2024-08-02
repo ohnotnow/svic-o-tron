@@ -48,6 +48,8 @@ To run the bot:
 A `Dockerfile` is included in this repository. This allows you to easily build and run your bot inside a Docker container.  Please see the `run.sh` script for an example of building and running the container.  The `run.sh` version assumes it will be used to run multiple different bots (different system prompts or LLMs).  So for each
 you would create a `.env.name-of-bot` file with the specific environment variables for that version - then run `run.sh name-of-bot` to use that env.
 
+There is a `.env.example` in the repo - so you should be able to just copy it and fill in your desired values.
+
 ## License
 
 Released under the MIT License.  See [LICENSE.md] for details.
