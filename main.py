@@ -6,7 +6,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone, time
 import pytz
-from gepetto import bot_factory, guard, summary, dalle
+from gepetto import bot_factory, guard, summary, dalle, rag
 import discord
 from discord import File
 from discord.ext import commands, tasks
@@ -32,6 +32,7 @@ eccentricities = [
 ]
 # Fetch environment variables
 server_id = os.getenv("DISCORD_SERVER_ID", "not_set")
+welcome_channel_id = os.getenv("DISCORD_WELCOME_CHANNEL_ID", "not_set")
 
 # Define which features are enabled
 enabled_features = [
@@ -126,12 +127,52 @@ async def on_ready():
     logger.info(f"Using model type : {type(chatbot)}")
 
 @bot.event
+async def on_member_join(member):
+    welcome_prompt = f"""
+    You are a helpful AI assistant called "{chatbot.name}" who is acting as a Discord bot.  You are tasked with creating a friendly, warm welcome to a new
+    member of an AI enthusiasts Discord server.  You should introduce yourself and provide a friendly, chatty version
+    of the server guidelines and help about interacting with you along with an invite to the new member to introduce themselves
+    in the #introductions channel.  You should ONLY respond with the welcome message, no other text as it will be send directly
+    as a Discord message and would make the user feel uncomfortable if it doesn't feel like a direct and natural response.
+
+    <server-guidelines>
+        See the '#laws-of-the-land' channel for the full guidelines
+
+        * Be a decent person and be respectful even if you disagree with the other person's point. Personal attacks, derogatory remarks, or discrimination and the like are a no go.
+        * No political debates, there's enough of that on the internet, use this as a place to seek refuge.
+        * Aim for technical accuracy, cite sources where possible and make a clear distinction between fact or opinion. Don't be a kook.
+        * Sharing articles and tools is encouraged! But keep it to what's allowed via discord TOS and the law. Give credit where credit is due.
+        * When requesting help, provide detailed information about the issue. When offering help, be patient and respectful of all skill levels.
+        * Do not share private or confidential information without consent. This includes personal information and non-public data or code.
+        * Don't spam/promo (spammers get the 🔨) there are designated channels for networking and exchanging information 🙂
+
+        Finally - don't give us a reason to ban you, we want to build a kind and beneficial community where people feel comfortable to hop into a conversation.
+    </server-guidelines>
+
+    <{chatbot.name}-instructions>
+        - You can @ me to ask questions.
+        - You can ask me to summarise a webpage or video by using the 👀 emoji followed by the URL.  You can add a specific question or format after the URL if you want!
+        - If you don't want me to have any knowledge of the preceeding conversation, you can add --no-logs to the end of your message.
+    </{chatbot.name}-instructions>
+    """
+    response = chatbot.chat([
+        { 'role': 'system', 'content': welcome_prompt },
+        { 'role': 'user', 'content': f"Hi! I've just joined! My name is {member}!" }
+    ])
+    channel = chatbot.get_channel(welcome_channel_id)
+    if not channel:
+        logger.error(f"Could not find welcome channel with ID {welcome_channel_id}")
+        return
+    await channel.send(f'{member} {response.message}')
+
+@bot.event
 async def on_message(message):
     message_ignored, abusive_reply = guard.should_block(message, bot, server_id)
     if message_ignored:
         if abusive_reply:
             logger.info("Blocked message from: " + message.author.name + " and abusing them")
             await message.channel.send(f"{random.choice(abusive_responses)}.")
+            return
         return
 
     question = message.content.split(' ', 1)[1][:500].replace('\r', ' ').replace('\n', ' ')
@@ -176,9 +217,35 @@ async def on_message(message):
                         'content': f'{question}? :: {page_text}'
                     },
                 ]
-                response = await chatbot.chat(messages, temperature=1.0)
+                response = await chatbot.chat(messages, temperature=temperature)
                 page_summary = response.message[:1900] + "\n" + response.usage
             await message.reply(f"Here's a summary of the content:\n{page_summary}")
+        elif lq.startswith("show search"):
+            question = question.replace("show search", "")
+            question = question.strip()
+            logger.info('Starting search for ' + question)
+            async with message.channel.typing():
+                search_results = rag.search(question)
+                pretty_search_results = rag.results_to_discord_message(search_results)
+            await message.reply(f"Here are the search results:\n{pretty_search_results}")
+        elif lq.startswith("show question"):
+            question = question.replace("show question", "")
+            question = question.strip()
+            logger.info('Starting show question for ' + question)
+            async with message.channel.typing():
+                result = rag.query(question)
+            await message.reply(result)
+        elif lq.startswith("reindex"):
+            await message.reply(f"Sure!  I'll reindex the transcripts now.")
+            async with message.channel.typing():
+                for filename in os.listdir("./transcripts/"):
+                    if not filename.endswith(".json"):
+                        continue
+
+                    with open(os.path.join("./transcripts/", filename), 'r') as f:
+                        contents = f.read()
+                        rag.process_transcript(contents)
+            await message.reply(f"Reindexed.")
         else:
             async with message.channel.typing():
                 if "--no-logs" in question.lower():

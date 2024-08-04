@@ -3,3 +3,9 @@ __pycache__*
 autogen.*
 .env.*
 !.env.example
+venv*
+test_*
+chroma_data/*
+chroma-data/*
+!chroma-data/.gitkeep
+chroma.log
