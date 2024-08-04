@@ -52,4 +52,4 @@ There is a `.env.example` in the repo - so you should be able to just copy it an
 
 ## License
 
-Released under the MIT License.  See [LICENSE.md] for details.
+Released under the GNU AGPL v3 License.  See [LICENSE.md] for details.
