@@ -3,12 +3,22 @@ services:
     build: .
     command: python3 main.py
     env_file:
-      - .env.jenny
+      - .env.uggo
+    environment:
+      - PYTHONUNBUFFERED=1
 
   chromadb:
     image: chromadb/chroma:latest
     volumes:
       - ./chroma-data:/chroma/chroma
+    command: "--workers 1 --host 0.0.0.0 --port 8000 --proxy-headers --log-config chromadb/log_config.yml --timeout-keep-alive 30"
+    environment:
+      - IS_PERSISTENT=TRUE
+
+  chromadbugly:
+    image: chromadb/chroma:latest
+    volumes:
+      - ./chroma-data-ugly:/chroma/chroma
     command: "--workers 1 --host 0.0.0.0 --port 8000 --proxy-headers --log-config chromadb/log_config.yml --timeout-keep-alive 30"
     environment:
       - IS_PERSISTENT=TRUE

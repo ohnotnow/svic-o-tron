@@ -237,14 +237,18 @@ async def on_message(message):
             await message.reply(result)
         elif lq.startswith("reindex"):
             await message.reply(f"Sure!  I'll reindex the transcripts now.")
+            if "ugly" in lq:
+                subdir = "phpugly"
+            else:
+                subdir = "svic"
             async with message.channel.typing():
-                for filename in os.listdir("./transcripts/"):
+                for filename in os.listdir(f"./transcripts/{subdir}"):
                     if not filename.endswith(".json"):
                         continue
 
-                    with open(os.path.join("./transcripts/", filename), 'r') as f:
+                    with open(os.path.join(f"./transcripts/{subdir}", filename), 'r') as f:
                         contents = f.read()
-                        rag.process_transcript(contents)
+                        rag.process_transcript(contents, transcript_format=subdir)
             await message.reply(f"Reindexed.")
         else:
             async with message.channel.typing():

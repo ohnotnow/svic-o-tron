@@ -16,6 +16,7 @@ class SearchResult():
         self.distance = distance
 
 def get_collection(name="svic-transcripts"):
+    name = os.getenv("CHROMA_COLLECTION", name)
     client = chromadb.HttpClient(os.getenv("CHROMA_HOST", "localhost"))
     return client.get_or_create_collection(name=name)
 
@@ -37,7 +38,14 @@ def get_cost(openai_response, model="gpt-4o-mini"):
     cost = input_cost + output_cost
     return cost
 
-def split_transcript(transcript, max_chars=10000, overlap_chars=500):
+def parse_whisper_transcript(transcript):
+    structured_transcript = json.loads(transcript)
+    plain_text_content = ""
+    for part in structured_transcript['transcription']:
+        plain_text_content += f"start_seconds: {int(part['offsets']['from'] / 1000)}\n{part['text']}\n\n"
+    return plain_text_content, structured_transcript['title'], structured_transcript['youtube_url']
+
+def parse_api_transcript(transcript):
     parsed_transcript = json.loads(transcript)
     title = parsed_transcript["data"]["transcripts"][0]["name"]
     url = parsed_transcript["youtube_url"]
@@ -45,6 +53,13 @@ def split_transcript(transcript, max_chars=10000, overlap_chars=500):
     plain_text_content = ""
     for content in parsed_content:
         plain_text_content += f"start_seconds: {int(content['start'])}\n{content['text']}\n\n"
+    return plain_text_content, title, url
+
+def split_transcript(transcript, max_chars=10000, overlap_chars=500, transcript_format="svic"):
+    if transcript_format == "svic":
+        plain_text_content, title, url = parse_api_transcript(transcript)
+    else:
+        plain_text_content, title, url = parse_whisper_transcript(transcript)
     pattern = r'start_seconds: (\d+)\n(.+?)(?=\nstart_seconds|\Z)'
     matches = re.findall(pattern, plain_text_content, re.DOTALL)
     chunks = []
@@ -191,7 +206,7 @@ def query(query, model="gpt-4o-mini"):
     results = search(query, results_limit=15)
     context = ""
     for result in results:
-        context += f"{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{results.metadata["url"]}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}\n\n"
+        context += f"{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{result.metadata['url']}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}\n\n"
     prompt = f"""
     <context>
     {context}
@@ -219,8 +234,8 @@ def query(query, model="gpt-4o-mini"):
     message = str(response.choices[0].message.content)
     return message
 
-def process_transcript(transcript, show_title=None, chunk_words=150):
-    parts, title, url = split_transcript(transcript, max_chars=10000)
+def process_transcript(transcript, show_title=None, chunk_words=150, transcript_format="svic"):
+    parts, title, url = split_transcript(transcript, max_chars=10000, transcript_format=transcript_format)
     all_chunks = []
     if not show_title:
         show_title = title
@@ -233,10 +248,12 @@ def process_transcript(transcript, show_title=None, chunk_words=150):
     return all_chunks
 
 if __name__ == "__main__":
-    with open("transcript.srt", "r") as f:
+    with open("transcripts/phpugly/phpugly391.json", "r") as f:
         transcript = f.read()
     # chunks = chunk_transcript(transcript, "Show 1234", chunk_words=150)
-
+    results = split_transcript(transcript, max_chars=10000, transcript_format="phpugly")
+    print(results)
+    exit()
     client = chromadb.HttpClient(os.getenv("CHROMA_HOST", "localhost"))
     client.delete_collection("svic-transcripts")
     collection = client.get_or_create_collection("svic-transcripts")

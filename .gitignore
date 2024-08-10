@@ -5,7 +5,7 @@ autogen.*
 !.env.example
 venv*
 test_*
-chroma_data/*
-chroma-data/*
+chroma-data*
 !chroma-data/.gitkeep
 chroma.log
+transcripts/*
