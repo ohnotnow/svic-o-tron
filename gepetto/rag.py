@@ -311,10 +311,11 @@ async def process_transcript(transcript: str, show_title: str = "", url: str = "
     return RagResponse(f"Added {len(all_chunks)} chunks to the RAG system.", total_cost)
 
 if __name__ == "__main__":
-    with open('transcripts/jordan-thibodeaus-studio_using-ai-to-predict-clinical-trial-success-airpods-pro-2-with-hearing-aid-features-svic-43.txt', "r") as f:
-        transcript = f.read()
-    stats = process_transcript(transcript, "Show 1234", "https://www.youtube.com/watch?v=f5ZQVg-SmWI")
-    print(stats)
-    response = query("What did they say about the new AirPods?")
-    print(response)
-    exit()
+    async def main():
+        with open('transcripts/jordan-thibodeaus-studio_using-ai-to-predict-clinical-trial-success-airpods-pro-2-with-hearing-aid-features-svic-43.txt', "r") as f:
+            transcript = f.read()
+        stats = await process_transcript(transcript, "Show 1234", "https://www.youtube.com/watch?v=f5ZQVg-SmWI")
+        print(stats)
+        response = await query("What did they say about the new AirPods?")
+        print(response)
+    asyncio.run(main())
