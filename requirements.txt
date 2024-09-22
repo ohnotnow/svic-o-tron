@@ -1,5 +1,5 @@
 discord.py==2.3.0
-openai==1.4.0
+openai==1.47.0
 beautifulsoup4==4.12.2
 youtube_transcript_api==0.6.1
 pypdf2==3.0.1
@@ -7,4 +7,4 @@ feedparser==6.0.10
 trafilatura==1.8.1
 groq
 anthropic
-chromadb
+chromadb==0.5.7

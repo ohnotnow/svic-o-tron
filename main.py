@@ -11,7 +11,7 @@ import discord
 from discord import File
 from discord.ext import commands, tasks
 import openai
-
+import asyncio
 
 previous_image_description = "Here is my image based on recent chat in my Discord server!"
 logger = logging.getLogger('discord')  # Get the discord logger
@@ -50,6 +50,16 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+async def process_transcript(transcript_contents: str, show_url: str, message: discord.Message):
+    try:
+        logger.info(f"Processing starting for {show_url}")
+        result = await rag.process_transcript(transcript_contents, "OpenAI hits 11 million paid subscribers and is raising at a valuation of 150 billion", show_url)
+        await message.channel.send(f"{message.author.mention} {result}")
+        logger.info(f"Processing completed for {show_url}")
+    except Exception as e:
+        logger.error(f"Error processing {show_url}: {str(e)}")
+        await message.channel.send(f"{message.author.mention} An error occurred while processing {show_url}")
+
 def remove_nsfw_words(message):
     message = re.sub(r"(fuck|prick|asshole|shit|wanker|dick)", "", message)
     return message
@@ -84,32 +94,38 @@ async def get_history_as_openai_messages(channel, include_bot_messages=True, lim
     # We reverse the list to make it in chronological order
     return messages[::-1]
 
-def build_messages(question, extended_messages, system_prompt=None):
+def convert_history_to_text(history: list[dict]):
+    channel_history = "<channel-history>\n"
+    for message in history:
+        channel_history += f"{message['content']}\n"
+    channel_history += "</channel-history>\n"
+    return channel_history
+
+def get_system_prompt():
     now = datetime.now()
     day = now.strftime("%d")
     suffix = lambda day: "th" if 11 <= int(day) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(int(day) % 10, "th")
     formatted_date = now.strftime("%B %d" + suffix(day) + ", %Y %I:%M %p")
-    if system_prompt is None:
-        default_prompt = os.getenv('DISCORD_BOT_DEFAULT_PROMPT', f'You are a helpful AI assistant called "{chatbot.name}" who specialises in providing answers to questions.  You should ONLY respond with the answer, no other text.')
-    else:
-        default_prompt = system_prompt
+    default_prompt = os.getenv('DISCORD_BOT_DEFAULT_PROMPT', f'You are a helpful AI assistant called "{chatbot.name}" who specialises in providing answers to questions.  You should ONLY respond with the answer, no other text.')
     # Add an eccentricity to the prompt once in a while
     if random.random() > 0.95:
         default_prompt += "\n\n" + random.choice(eccentricities)
-    extended_messages.append(
-        {
-            'role': 'user',
-            'content': f'{question}'
-        },
-    )
-    extended_messages.append(
+    return f'Today is {formatted_date}. {default_prompt}.'
+
+def build_messages(question, extended_messages, system_prompt=None):
+    history = convert_history_to_text(extended_messages)
+    messages = [
         {
             'role': 'system',
-            'content': f'Today is {formatted_date}. {default_prompt}.'
-        }
-    )
+            'content': get_system_prompt()
+        },
+        {
+            'role': 'user',
+            'content': f'{history}\n\n{question}'
+        },
+    ]
 
-    return extended_messages
+    return messages
 
 def remove_emoji(text):
     regrex_pattern = re.compile(pattern = "["
@@ -122,8 +138,8 @@ def remove_emoji(text):
 
 @bot.event
 async def on_ready():
-    random_chat.start()
-    make_chat_image.start()
+    # random_chat.start()
+    # make_chat_image.start()
     logger.info(f"Using model type : {type(chatbot)}")
 
 @bot.event
@@ -136,7 +152,7 @@ async def on_member_join(member):
     as a Discord message and would make the user feel uncomfortable if it doesn't feel like a direct and natural response.
 
     <server-guidelines>
-        See the '#laws-of-the-land' channel for the full guidelines
+        See the #laws-of-the-land channel for the full guidelines
 
         * Be a decent person and be respectful even if you disagree with the other person's point. Personal attacks, derogatory remarks, or discrimination and the like are a no go.
         * No political debates, there's enough of that on the internet, use this as a place to seek refuge.
@@ -152,7 +168,7 @@ async def on_member_join(member):
     <{chatbot.name}-instructions>
         - You can @ me to ask questions.
         - You can ask me to summarise a webpage or video by using the 👀 emoji followed by the URL.  You can add a specific question or format after the URL if you want!
-        - If you don't want me to have any knowledge of the preceeding conversation, you can add --no-logs to the end of your message.
+        - If you don't want me to have any knowledge of the recent preceeding chat, you can add --no-logs to the end of your message.
     </{chatbot.name}-instructions>
     """
     response = chatbot.chat([
@@ -167,6 +183,7 @@ async def on_member_join(member):
 
 @bot.event
 async def on_message(message):
+    logger.info(f"Received message: {message.author.name}")
     message_ignored, abusive_reply = guard.should_block(message, bot, server_id)
     if message_ignored:
         if abusive_reply:
@@ -225,31 +242,30 @@ async def on_message(message):
             question = question.strip()
             logger.info('Starting search for ' + question)
             async with message.channel.typing():
-                search_results = rag.search(question)
+                search_results, terms = await rag.search(question)
                 pretty_search_results = rag.results_to_discord_message(search_results)
-            await message.reply(f"Here are the search results:\n{pretty_search_results}")
+            await message.reply(f"Here are the search results:\n{pretty_search_results}\n\nRAG Terms: {terms}")
         elif lq.startswith("show question"):
             question = question.replace("show question", "")
             question = question.strip()
             logger.info('Starting show question for ' + question)
             async with message.channel.typing():
-                result = rag.query(question)
-            await message.reply(result)
-        elif lq.startswith("reindex"):
-            await message.reply(f"Sure!  I'll reindex the transcripts now.")
-            if "ugly" in lq:
-                subdir = "phpugly"
-            else:
-                subdir = "svic"
-            async with message.channel.typing():
-                for filename in os.listdir(f"./transcripts/{subdir}"):
-                    if not filename.endswith(".json"):
-                        continue
+                result = await rag.query(question)
+            await message.reply(f"{message.author.mention} {result}")
+        elif message.attachments and lq.startswith('index '):
+            url_match = re.search(r'index (https?://\S+)', message.content)
+            if not url_match:
+                await message.channel.send(f"Please provide a URL for the file you want to index, dummy.", mention_author=True)
+                return
+            url = url_match.group(1)
+            for att in message.attachments:
+                await message.channel.send(f"Received file {att.filename}. Processing started for {url}", mention_author=True)
+                logger.info(f"Processing {att.filename} for {url}")
+                contents = await att.read()
 
-                    with open(os.path.join(f"./transcripts/{subdir}", filename), 'r') as f:
-                        contents = f.read()
-                        rag.process_transcript(contents, transcript_format=subdir)
-            await message.reply(f"Reindexed.")
+                await message.channel.send(f"Read file contents ok.")
+
+                asyncio.create_task(process_transcript(contents.decode("utf-8"), url, message))
         else:
             async with message.channel.typing():
                 if "--no-logs" in question.lower():
@@ -261,6 +277,7 @@ async def on_message(message):
                     else:
                         context = []
                 messages = build_messages(question, context)
+                logger.info(f"Messages: {messages}")
                 response = await chatbot.chat(messages, temperature=temperature)
                 response_text = response.message
                 # try and remove LLM 'added extras'
@@ -268,8 +285,8 @@ async def on_message(message):
                 response_text = re.sub(r"Gepetto' said: ", '', response_text, flags=re.MULTILINE)
                 response_text = re.sub(r"Minxie' said: ", '', response_text, flags=re.MULTILINE)
                 response_text = re.sub(r"^.*At \d{4}-\d{2}.+said?", "", response_text, flags=re.MULTILINE)
-                # make sure the message fits into discord's 2000 character limit
-                response = response_text.strip()[:1900] + "\n" + response.usage
+                # make sure the message fits into discord's 2000 character limit (allow for unicode/emoji/etc)
+                response = response_text.strip()[:1800] + "\n" + response.usage
             # send the response as a reply and mention the person who asked the question
             await message.reply(f'{message.author.mention} {response}')
     except Exception as e:
