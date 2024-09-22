@@ -276,10 +276,24 @@ async def remove_existing_chunks(url: str):
     collection = await get_collection()
     await collection.delete(where={"url": url})
 
+def transcript_looks_valid(transcript: str) -> bool:
+    """
+    Check if the transcript looks valid.
+    """
+    plain_text_content = parse_local_transcript(transcript)
+    pattern = r'(\w+)\s*\((\d{1,2}:\d{2}:\d{2}|\d{1,2}:\d{2})\)\n(.*?)(?=\n\w+\s*\(\d{1,2}:\d{2}|\Z)'
+    matches = re.findall(pattern, plain_text_content, re.DOTALL)
+    if len(matches) < 2 or len(plain_text_content) < 1000:
+        return False
+    return True
+
 async def process_transcript(transcript: str, show_title: str = "", url: str = "", chunk_words: int = 150, transcript_format: str = "svic") -> RagResponse:
     """
     Process the transcript and add it to the RAG system.
     """
+    if not transcript_looks_valid(transcript):
+        return RagResponse("Transcript does not look valid", 0)
+
     await remove_existing_chunks(url)
 
     parts = split_transcript(transcript)
