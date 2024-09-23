@@ -203,7 +203,7 @@ async def query_to_rag_terms(query: str) -> tuple[list[str], float]:
     message = str(response.choices[0].message.content)
     return json.loads(message)["terms"], cost
 
-async def search(query: str, results_limit=5) -> list[SearchResult]:
+async def search(query: str, results_limit=5, should_rerank: bool = True) -> list[SearchResult]:
     """
     Search for the query in the RAG system and return a list of show SearchResult objects.
     """
@@ -218,6 +218,8 @@ async def search(query: str, results_limit=5) -> list[SearchResult]:
     result_list = []
     for id, document, meta, distance in id_document_pairs:
         result_list.append(SearchResult(id, document, meta, distance))
+    if should_rerank:
+        result_list, cost = await rerank_results(query, result_list)
     return result_list, terms
 
 def results_to_discord_message(results: list[SearchResult]) -> str:
@@ -236,14 +238,14 @@ def results_to_discord_message(results: list[SearchResult]) -> str:
         message += f"- {get_confidence_emoji(result.distance)} [{result.metadata['source']} @{timestamp}]({url}?t={result.metadata['seconds']}) : _{cleaned_text[:50]}_\n"
     return message
 
-async def query(query: str, model=default_model) -> RagResponse:
+async def query(query: str, model=default_model, should_rerank: bool = True) -> RagResponse:
     """
     Perform a general query of the RAG system and return a response from the LLM.
     """
-    results, terms = await search(query, results_limit=10)
+    results, terms = await search(query, results_limit=10, should_rerank=should_rerank)
     context = ""
     for result in results:
-        context += f"{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{result.metadata['url']}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}\n\n"
+        context += f"<context-item>{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{result.metadata['url']}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}</context-item>\n\n"
     prompt = f"""
     <context>
     {context}
@@ -251,7 +253,6 @@ async def query(query: str, model=default_model) -> RagResponse:
 
     {query}
     """
-    print(prompt)
     api_key = os.getenv("OPENAI_API_KEY")
     api_base = "https://api.openai.com/v1/"
     client = AsyncOpenAI(api_key=api_key, base_url=api_base)
@@ -260,7 +261,7 @@ async def query(query: str, model=default_model) -> RagResponse:
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful AI assistant that tries to help users with their queries.  They will sometimes give you some additional local context based on the transcripts from a video.  You should use that context over your own knowledge if it is provided as the context is what the user expects to be asking about.  If you use information from the context please reference the show title and show url as this will help the user explore further (please put the show url inside angle-brackets (eg, <https://www.youtube.com/watch?v=f5ZQVg-SmWI>) so that discord does not generate a full preview of the link).  Please keep your reply fairly concise and to the point.  You do not need to mention that you are reading from the context provided - the user will assume that is the case.",
+                "content": "You are a helpful AI assistant that tries to help users with their queries.  They will sometimes give you some additional local context based on the transcripts from a video. The context will be ordered from most relevant to least relevant. You should use that context over your own knowledge if it is provided as the context is what the user expects to be asking about.  If you use information from the context please reference the show title and show url as this will help the user explore further (please put the show url inside angle-brackets (eg, <https://www.youtube.com/watch?v=f5ZQVg-SmWI>) so that discord does not generate a full preview of the link).  Please keep your reply fairly concise and to the point.  Remember - you do not need to mention that you are reading from the context provided - the user will assume that is the case.",
             },
             {
                 "role": "user",
@@ -275,6 +276,54 @@ async def query(query: str, model=default_model) -> RagResponse:
 async def remove_existing_chunks(url: str):
     collection = await get_collection()
     await collection.delete(where={"url": url})
+
+async def rerank_results(query: str, results: list[SearchResult]) -> list[SearchResult]:
+    """
+    Rerank the results using a further LLM call based on the original user query.
+    """
+    prompt = f"""
+    Original user query: "{query}"
+
+    Below are {len(results)} transcript vector database chunks from a podcast about AI, technology and business.
+    Rank these chunks based on their relevance to the user's query.
+    Consider context, implied meaning, and overall relevance.  If the chunk does not
+    seem relevant or is a duplicate, you should not include it in the rankings.
+
+    Output the rankings as JSON in the format using the chunk ids:
+
+    {{
+        "rankings": [id1, id3, id4, id2, ...]
+    }}
+    """
+    for result in results:
+        prompt += f"<rag-chunk id=\"{result.id.split('-')[0]}\">{result.document}</rag-chunk>\n\n"
+
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url="https://api.openai.com/v1/")
+    response = await client.chat.completions.create(
+        model=default_model,
+        temperature=0.1,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        response_format={"type": "json_object"},
+    )
+    cost = get_cost(response, model=default_model)
+    message = str(response.choices[0].message.content)
+    try:
+        decoded_response = json.loads(message)["rankings"]
+    except json.JSONDecodeError:
+        return results, cost
+    ranked_results = []
+    for i, document_id in enumerate(decoded_response):
+        for result in results:
+            numeric_id = result.id.split("-")[0].strip()
+            if int(numeric_id) == int(document_id):
+                ranked_results.append(result)
+                break
+    return ranked_results, cost
 
 def transcript_looks_valid(transcript: str) -> bool:
     """
@@ -318,4 +367,4 @@ if __name__ == "__main__":
         print(stats)
         response = await query("What did they say about the new AirPods?")
         print(response)
-    asyncio.run(main())
+#    asyncio.run(main())
