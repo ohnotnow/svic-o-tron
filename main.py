@@ -238,24 +238,30 @@ async def on_message(message):
         elif lq.startswith("show search"):
             question = question.replace("show search", "")
             question = question.strip()
-            if "--exact" in question.lower():
-                question = question.lower().replace("--exact", "")
-                should_autorag = False
-            else:
-                should_autorag = True
+            # if "--exact" in question.lower():
+            #     question = question.lower().replace("--exact", "")
+            #     should_autorag = False
+            # else:
+            #     should_autorag = True
+            should_autorag = False
             logger.info('Starting search for ' + question)
             async with message.channel.typing():
                 search_results, terms = await rag.search(question, should_autorag=should_autorag)
+            if len(search_results) > 0:
                 pretty_search_results = rag.results_to_discord_message(search_results)
-            await message.reply(f"Here are the search results:\n{pretty_search_results}\n\nRAG Terms: {terms}")
+                reply_message = f"Here are the search results:\n{pretty_search_results}"
+            else:
+                reply_message = f"No results found for {question} 😢."
+            await message.reply(reply_message)
         elif lq.startswith("show question"):
             question = question.replace("show question", "")
             question = question.strip()
-            if "--exact" in question.lower():
-                question = question.lower().replace("--exact", "")
-                should_autorag = False
-            else:
-                should_autorag = True
+            # if "--exact" in question.lower():
+            #     question = question.lower().replace("--exact", "")
+            #     should_autorag = False
+            # else:
+            #     should_autorag = True
+            should_autorag = False
             logger.info('Starting show question for ' + question)
             async with message.channel.typing():
                 result = await rag.query(question, should_autorag=should_autorag)

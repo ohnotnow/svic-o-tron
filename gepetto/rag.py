@@ -5,20 +5,21 @@ import chromadb
 from openai import AsyncOpenAI
 from gepetto import gpt
 import asyncio
+from dataclasses import dataclass
 
 default_model = gpt.Model.GPT_4_OMNI_MINI.value[0]
+@dataclass
 class SearchResult():
-    def __init__(self, id, document, metadata, distance):
-        self.id = id
-        self.document = document.strip().replace("\n", " ")
-        self.metadata = metadata
-        self.distance = distance
+    id: str
+    document: str
+    metadata: dict
+    distance: float
 
+@dataclass
 class RagResponse():
-    def __init__(self, message: str, cost):
-        self.message = message
-        self.cost = cost
-        self.model = default_model
+    message: str
+    cost: float
+    model = default_model
 
     def __str__(self):
         return f"{self.message}\n_[Model: {self.model}, Cost: ${self.cost:.6f}]_"
@@ -185,17 +186,38 @@ async def query_to_rag_terms(query: str) -> tuple[list[str], float]:
     api_key = os.getenv("OPENAI_API_KEY")
     api_base = "https://api.openai.com/v1/"
     client = AsyncOpenAI(api_key=api_key, base_url=api_base)
+    system_prompt = """
+    You are a helpful AI assistant who is an expert in Retrieval-Augmented Generation (RAG) systems. You are
+    tasked with identifying key terms in a user query that can be used to retrieve relevant information from a large
+    corpus of video transcripts. You should provide a list of terms that are likely to be present in the text
+    that the user is looking for to give them the very best results when used in a RAG search.  Your response
+    should be a JSON object in the format :
+
+    {"terms": ["first term", "second", "third", "fourth", ...]}
+
+    Please remember that the terms are used in a RAG search, so do not add too many terms of your own.  You should
+    be quite conservative about adding your own terms - only add terms that you are confident will help give specific
+    results to the user.
+
+    Example of good terms:
+    User query: "What did they say about Elon?"
+    RAG terms: ["elon", "musk", "tesla", "spacex"]
+
+    Example of bad terms:
+    User query: "What did they say about Elon?"
+    RAG terms: ["elon musk", "tesla", "spacex", "ai", "technology", "business", "startups", "venture capital", "silicon valley", "twitter", "entrepreneur", "innovation"]
+    """
     response = await client.chat.completions.create(
         model=default_model,
         response_format={"type": "json_object"},
         messages=[
             {
                 "role": "system",
-                "content": 'You are a helpful AI assistant who is an expert in Retrieval-Augmented Generation (RAG) systems. You are tasked with identifying key terms in a user query that can be used to retrieve relevant information from a large corpus of video transcripts. You should provide a list of terms that are likely to be present in the text that the user is looking for to give them the very best results when used in a RAG search.  Your response should be a JSON object in the format The format should be `{"terms": ["first term", "second", "third", "fourth", ...]}`',
+                "content": system_prompt,
             },
             {
                 "role": "user",
-                "content": f'Could you give me a JSON object containing an array of RAG terms based on this query? . <query>{query}</query>',
+                "content": f'Could you give me a JSON object containing an array of RAG terms based on my query? The terms should assume the query is about IT, AI, technology, business, and startups if it is not clear from the query. <query>{query}</query>',
             }
         ],
     )
@@ -203,22 +225,33 @@ async def query_to_rag_terms(query: str) -> tuple[list[str], float]:
     message = str(response.choices[0].message.content)
     return json.loads(message)["terms"], cost
 
-async def search(query: str, results_limit=5, should_rerank: bool = True) -> list[SearchResult]:
+async def search(query: str, results_limit=5, should_rerank: bool = True, should_autorag: bool = True) -> list[SearchResult]:
     """
     Search for the query in the RAG system and return a list of show SearchResult objects.
     """
-    terms, cost = await query_to_rag_terms(query)
+    if should_autorag:
+        terms, cost = await query_to_rag_terms(query)
+    else:
+        cleaned_query = re.sub(r'\W+', ' ', query)
+        terms = cleaned_query.split()
     collection = await get_collection()
-    results = await collection.query(query_texts=terms, n_results=results_limit, include=["metadatas", "documents", 'distances'])
+    results = await collection.query(query_texts=[query.strip()], n_results=results_limit*2, include=["metadatas", "documents", 'distances'])
     ids = results['ids'][0]
     documents = results['documents'][0]
     metadata = results['metadatas'][0]
     distances = results['distances'][0]
     id_document_pairs = list(zip(ids, documents, metadata, distances))
+    # reorder the list based on distance - closest match to worst
+    id_document_pairs.sort(key=lambda x: x[3])
     result_list = []
+    counter = 0
     for id, document, meta, distance in id_document_pairs:
-        result_list.append(SearchResult(id, document, meta, distance))
-    if should_rerank:
+        if distance < 1.55:
+            result_list.append(SearchResult(id, document, meta, distance))
+            counter += 1
+            if counter > results_limit:
+                break
+    if should_rerank and should_autorag:
         result_list, cost = await rerank_results(query, result_list)
     return result_list, terms
 
@@ -226,6 +259,8 @@ def results_to_discord_message(results: list[SearchResult]) -> str:
     """
     Convert the list of SearchResult objects to a Discord markdown-formatted message.
     """
+    if len(results) == 0:
+        return ""
     message = ""
     for result in results:
         timestamp = result.metadata['timestamp']
@@ -235,14 +270,19 @@ def results_to_discord_message(results: list[SearchResult]) -> str:
         url = result.metadata['url']
         remove_timestamp_pattern = r'\b[A-Za-z]+\s\(\d{2}:\d{2}:\d{2}\)'
         cleaned_text = re.sub(remove_timestamp_pattern, '', result.document)
-        message += f"- {get_confidence_emoji(result.distance)} [{result.metadata['source']} @{timestamp}]({url}?t={result.metadata['seconds']}) : _{cleaned_text[:50]}_\n"
+        cleaned_text = cleaned_text.replace("\n", " ")
+        if '?' in url:
+            url += f'&t={result.metadata["seconds"]}s'
+        else:
+            url += f"?t={result.metadata['seconds']}s"
+        message += f"- {get_confidence_emoji(result.distance)} [{result.metadata['source']} @{timestamp}](<{url}>) : _{cleaned_text[:50]}_\n"
     return message
 
-async def query(query: str, model=default_model, should_rerank: bool = True) -> RagResponse:
+async def query(query: str, model=default_model, should_rerank: bool = True, should_autorag: bool = True) -> RagResponse:
     """
     Perform a general query of the RAG system and return a response from the LLM.
     """
-    results, terms = await search(query, results_limit=10, should_rerank=should_rerank)
+    results, terms = await search(query, results_limit=10, should_rerank=should_rerank, should_autorag=should_autorag)
     context = ""
     for result in results:
         context += f"<context-item>{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{result.metadata['url']}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}</context-item>\n\n"
@@ -271,7 +311,7 @@ async def query(query: str, model=default_model, should_rerank: bool = True) -> 
     )
     cost = get_cost(response, model)
     message = str(response.choices[0].message.content)
-    return RagResponse(f"{message}\n\nRAG Terms: {terms}", cost)
+    return RagResponse(f"{message}", cost)
 
 async def remove_existing_chunks(url: str):
     collection = await get_collection()
@@ -359,12 +399,13 @@ async def process_transcript(transcript: str, show_title: str = "", url: str = "
     await add_to_chroma(all_chunks)
     return RagResponse(f"Added {len(all_chunks)} chunks to the RAG system.", total_cost)
 
+async def main():
+    with open('transcripts/jordan-thibodeaus-studio_using-ai-to-predict-clinical-trial-success-airpods-pro-2-with-hearing-aid-features-svic-43.txt', "r") as f:
+        transcript = f.read()
+    stats = await process_transcript(transcript, "Show 1234", "https://www.youtube.com/watch?v=f5ZQVg-SmWI")
+    print(stats)
+    response = await query("What did they say about the new AirPods?")
+    print(response)
+
 if __name__ == "__main__":
-    async def main():
-        with open('transcripts/jordan-thibodeaus-studio_using-ai-to-predict-clinical-trial-success-airpods-pro-2-with-hearing-aid-features-svic-43.txt', "r") as f:
-            transcript = f.read()
-        stats = await process_transcript(transcript, "Show 1234", "https://www.youtube.com/watch?v=f5ZQVg-SmWI")
-        print(stats)
-        response = await query("What did they say about the new AirPods?")
-        print(response)
-#    asyncio.run(main())
+    asyncio.run(main())
