@@ -50,15 +50,13 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-async def process_transcript(transcript_contents: str, show_url: str, message: discord.Message):
+async def process_transcript(transcript_contents: str, show_title: str, show_url: str, message: discord.Message):
     try:
-        logger.info(f"Processing starting for {show_url}")
-        result = await rag.process_transcript(transcript_contents, "OpenAI hits 11 million paid subscribers and is raising at a valuation of 150 billion", show_url)
+        result = await rag.process_transcript(transcript_contents, show_title, show_url)
         await message.channel.send(f"{message.author.mention} {result}")
-        logger.info(f"Processing completed for {show_url}")
     except Exception as e:
-        logger.error(f"Error processing {show_url}: {str(e)}")
-        await message.channel.send(f"{message.author.mention} An error occurred while processing {show_url}")
+        logger.error(f"Error transcribing {show_title}: {str(e)}")
+        await message.channel.send(f"{message.author.mention} An error occurred while transcribing {show_title}")
 
 def remove_nsfw_words(message):
     message = re.sub(r"(fuck|prick|asshole|shit|wanker|dick)", "", message)
@@ -240,32 +238,43 @@ async def on_message(message):
         elif lq.startswith("show search"):
             question = question.replace("show search", "")
             question = question.strip()
+            if "--exact" in question.lower():
+                question = question.lower().replace("--exact", "")
+                should_autorag = False
+            else:
+                should_autorag = True
             logger.info('Starting search for ' + question)
             async with message.channel.typing():
-                search_results, terms = await rag.search(question)
+                search_results, terms = await rag.search(question, should_autorag=should_autorag)
                 pretty_search_results = rag.results_to_discord_message(search_results)
             await message.reply(f"Here are the search results:\n{pretty_search_results}\n\nRAG Terms: {terms}")
         elif lq.startswith("show question"):
             question = question.replace("show question", "")
             question = question.strip()
+            if "--exact" in question.lower():
+                question = question.lower().replace("--exact", "")
+                should_autorag = False
+            else:
+                should_autorag = True
             logger.info('Starting show question for ' + question)
             async with message.channel.typing():
-                result = await rag.query(question)
+                result = await rag.query(question, should_autorag=should_autorag)
             await message.reply(f"{message.author.mention} {result}")
-        elif message.attachments and lq.startswith('index '):
-            url_match = re.search(r'index (https?://\S+)', message.content)
-            if not url_match:
-                await message.channel.send(f"Please provide a URL for the file you want to index, dummy.", mention_author=True)
-                return
-            url = url_match.group(1)
+        elif message.attachments and lq.startswith('index'):
+            await message.channel.send(f"Received {len(message.attachments)} {'file' if len(message.attachments) == 1 else 'files'}. Processing started!", mention_author=True)
             for att in message.attachments:
-                await message.channel.send(f"Received file {att.filename}. Processing started for {url}", mention_author=True)
-                logger.info(f"Processing {att.filename} for {url}")
+                logger.info(f"Processing transcript from {att.filename}")
                 contents = await att.read()
-
-                await message.channel.send(f"Read file contents ok.")
-
-                asyncio.create_task(process_transcript(contents.decode("utf-8"), url, message))
+                lines = contents.decode("utf-8").splitlines()
+                show_url = lines[0].strip()
+                show_title = lines[1].strip()
+                if not show_url:
+                    await message.channel.send(f"{message.author.mention} Missing URL for {att.filename}?", mention_author=True)
+                    return
+                if not re.match(r'^[\w]', show_title):
+                    await message.channel.send(f"{message.author.mention} Missing show title for {att.filename}?", mention_author=True)
+                    return
+                asyncio.create_task(process_transcript("\n".join(lines[2:]), show_title, show_url, message))
         else:
             async with message.channel.typing():
                 if "--no-logs" in question.lower():
