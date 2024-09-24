@@ -1,5 +1,7 @@
 import logging
 import os
+import zipfile
+import io
 import random
 import re
 import json
@@ -30,9 +32,16 @@ eccentricities = [
     f"You *loved* {random.choice(['Joes', 'Jordans'])} look in the latest video.",
     "You're excited about the bezel finish on your new phone and love discussing its features."
 ]
+help_info = """
+    - You can @ me to ask questions.
+    - You can ask me to summarise a webpage or video by starting your message with the 👀 emoji followed by the URL.  You can add a specific question or format after the URL if you want!
+    - If you don't want me to have any knowledge of the recent preceeding chat, you can add --no-logs to the end of your message.
+    - You can ask general questions about the show by starting your message with 'show question'.
+    - You can search for specific show content by starting your message with 'show search'.
+"""
 # Fetch environment variables
 server_id = os.getenv("DISCORD_SERVER_ID", "not_set")
-welcome_channel_id = os.getenv("DISCORD_WELCOME_CHANNEL_ID", "not_set")
+welcome_channel_id = int(os.getenv("DISCORD_WELCOME_CHANNEL_ID", 0))
 
 # Define which features are enabled
 enabled_features = [
@@ -142,6 +151,9 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
+    await send_welcome_message(member.name)
+
+async def send_welcome_message(username):
     welcome_prompt = f"""
     You are a helpful AI assistant called "{chatbot.name}" who is acting as a Discord bot.  You are tasked with creating a friendly, warm welcome to a new
     member of an AI enthusiasts Discord server.  You should introduce yourself and provide a friendly, chatty version
@@ -163,21 +175,19 @@ async def on_member_join(member):
         Finally - don't give us a reason to ban you, we want to build a kind and beneficial community where people feel comfortable to hop into a conversation.
     </server-guidelines>
 
-    <{chatbot.name}-instructions>
-        - You can @ me to ask questions.
-        - You can ask me to summarise a webpage or video by using the 👀 emoji followed by the URL.  You can add a specific question or format after the URL if you want!
-        - If you don't want me to have any knowledge of the recent preceeding chat, you can add --no-logs to the end of your message.
-    </{chatbot.name}-instructions>
+    Please also let the user know that they can ask you questions by mentioning you in chat and if they want to know what
+    special features you have available that mentioning you with 'help' will let them know.
     """
-    response = chatbot.chat([
-        { 'role': 'system', 'content': welcome_prompt },
-        { 'role': 'user', 'content': f"Hi! I've just joined! My name is {member}!" }
-    ])
-    channel = chatbot.get_channel(welcome_channel_id)
+    channel = bot.get_channel(welcome_channel_id)
     if not channel:
         logger.error(f"Could not find welcome channel with ID {welcome_channel_id}")
         return
-    await channel.send(f'{member} {response.message}')
+    async with channel.typing():
+        response = await chatbot.chat([
+            { 'role': 'system', 'content': welcome_prompt },
+            { 'role': 'user', 'content': f"Hi! I've just joined! My name is {username}!" }
+        ])
+    await channel.send(f'{response.message}')
 
 @bot.event
 async def on_message(message):
@@ -235,6 +245,16 @@ async def on_message(message):
                 response = await chatbot.chat(messages, temperature=temperature)
                 page_summary = response.message[:1900] + "\n" + response.usage
             await message.reply(f"Here's a summary of the content:\n{page_summary}")
+        elif lq == 'test':
+            await send_welcome_message(message.author.name)
+        elif lq == 'help':
+            async with message.channel.typing():
+                response = await chatbot.chat([
+                    { 'role': 'system', 'content': get_system_prompt() },
+                    { 'role': 'user', 'content': f'This is the help info for features enabled on this bot:\n<help-info>{help_info}</help-info>\n\nPlease reply with a friendly, chatty message explaining the help info to the user. Follow the personality of the bot in your instructions.' }
+                ])
+                help_info_response = response.message[:1800]
+            await message.reply(f"{help_info_response}")
         elif lq.startswith("show search"):
             question = question.replace("show search", "")
             question = question.strip()
@@ -251,10 +271,10 @@ async def on_message(message):
                 pretty_search_results = rag.results_to_discord_message(search_results)
                 reply_message = f"Here are the search results:\n{pretty_search_results}"
             else:
-                reply_message = f"No results found for {question} 😢."
+                reply_message = f"No results found for '{question}' 😢."
             await message.reply(reply_message)
-        elif lq.startswith("show question"):
-            question = question.replace("show question", "")
+        elif lq.startswith("show question") or lq.startswith("show query"):
+            question = question.replace("show question", "").replace("show query", "")
             question = question.strip()
             # if "--exact" in question.lower():
             #     question = question.lower().replace("--exact", "")
@@ -262,11 +282,10 @@ async def on_message(message):
             # else:
             #     should_autorag = True
             should_autorag = False
-            logger.info('Starting show question for ' + question)
             async with message.channel.typing():
                 result = await rag.query(question, should_autorag=should_autorag)
             await message.reply(f"{message.author.mention} {result}")
-        elif message.attachments and lq.startswith('index'):
+        elif message.attachments and lq == 'index':
             await message.channel.send(f"Received {len(message.attachments)} {'file' if len(message.attachments) == 1 else 'files'}. Processing started!", mention_author=True)
             for att in message.attachments:
                 logger.info(f"Processing transcript from {att.filename}")
@@ -281,6 +300,16 @@ async def on_message(message):
                     await message.channel.send(f"{message.author.mention} Missing show title for {att.filename}?", mention_author=True)
                     return
                 asyncio.create_task(process_transcript("\n".join(lines[2:]), show_title, show_url, message))
+        elif lq == "export" or lq == "backup":
+            async with message.channel.typing():
+                data = await rag.export_collection_to_json()
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    json_data = json.dumps(data)
+                    zip_file.writestr('rag-backup.json', json_data)
+                zip_buffer.seek(0)
+                discord_file = File(fp=zip_buffer, filename=f"rag-backup.zip")
+                await message.reply(f"Here is the exported RAG collection:", file=discord_file)
         else:
             async with message.channel.typing():
                 if "--no-logs" in question.lower():
@@ -292,7 +321,6 @@ async def on_message(message):
                     else:
                         context = []
                 messages = build_messages(question, context)
-                logger.info(f"Messages: {messages}")
                 response = await chatbot.chat(messages, temperature=temperature)
                 response_text = response.message
                 # try and remove LLM 'added extras'

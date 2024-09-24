@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import chromadb
 from openai import AsyncOpenAI
@@ -126,14 +127,16 @@ Your response should be in JSON format as follows :
             "url": "URL of the show",
             "chunk": "First chunk of transcript",
             "start_timestamp": "00:00:00",
-            "start_seconds": 0
+            "start_seconds": 0,
+            "summary": "Very short summary of the first chunk"
         },
         {
             "show_title": "Title of the show",
             "url": "URL of the show",
             "chunk": "Second chunk of transcript",
             "start_timestamp": "00:02:31",
-            "start_seconds": 151
+            "start_seconds": 151,
+            "summary": "Very short summary of the second chunk"
         },
         ...
     ]
@@ -146,7 +149,7 @@ Show URL: {url}
 {transcript}
 </transcript>
 
-Remember: You must keep the original text intact as it is for a RAG search.  Do not summarize the text.  Just break it into chunks.
+Remember: You must keep the original text intact as it is for a RAG search.  Do not summarize the chunk text itself outside of the summary field.  Just break it into chunks.
 """
     api_key = os.getenv("OPENAI_API_KEY")
     api_base = "https://api.openai.com/v1/"
@@ -175,7 +178,7 @@ async def add_to_chroma(chunks):
     for i, chunk in enumerate(chunks):
         await collection.add(
             documents=[chunk['chunk']], # we embed for you, or bring your own
-            metadatas=[{"source": chunk['show_title'], "seconds": chunk["start_seconds"], "url": chunk["url"], "timestamp": chunk["start_timestamp"]}], # filter on arbitrary metadata!
+            metadatas=[{"source": chunk['show_title'], "seconds": chunk["start_seconds"], "url": chunk["url"], "timestamp": chunk["start_timestamp"], "summary": chunk["summary"]}],
             ids=[f"{i}-{chunk['show_title']}"], # must be unique for each doc
         )
 
@@ -249,7 +252,7 @@ async def search(query: str, results_limit=5, should_rerank: bool = True, should
         if distance < 1.55:
             result_list.append(SearchResult(id, document, meta, distance))
             counter += 1
-            if counter > results_limit:
+            if counter >= results_limit:
                 break
     if should_rerank and should_autorag:
         result_list, cost = await rerank_results(query, result_list)
@@ -269,13 +272,14 @@ def results_to_discord_message(results: list[SearchResult]) -> str:
             timestamp = f"{timestamp_parts[1]}:{timestamp_parts[2]}"
         url = result.metadata['url']
         remove_timestamp_pattern = r'\b[A-Za-z]+\s\(\d{2}:\d{2}:\d{2}\)'
-        cleaned_text = re.sub(remove_timestamp_pattern, '', result.document)
+        cleaned_text = re.sub(remove_timestamp_pattern, '', result.metadata['summary'])
         cleaned_text = cleaned_text.replace("\n", " ")
+        cleaned_text = " ".join(cleaned_text.split()[:10])
         if '?' in url:
             url += f'&t={result.metadata["seconds"]}s'
         else:
             url += f"?t={result.metadata['seconds']}s"
-        message += f"- {get_confidence_emoji(result.distance)} [{result.metadata['source']} @{timestamp}](<{url}>) : _{cleaned_text[:50]}_\n"
+        message += f"- {get_confidence_emoji(result.distance)} [{result.metadata['source']} {timestamp}](<{url}>) : _{cleaned_text}_\n"
     return message
 
 async def query(query: str, model=default_model, should_rerank: bool = True, should_autorag: bool = True) -> RagResponse:
@@ -301,7 +305,7 @@ async def query(query: str, model=default_model, should_rerank: bool = True, sho
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful AI assistant that tries to help users with their queries.  They will sometimes give you some additional local context based on the transcripts from a video. The context will be ordered from most relevant to least relevant. You should use that context over your own knowledge if it is provided as the context is what the user expects to be asking about.  If you use information from the context please reference the show title and show url as this will help the user explore further (please put the show url inside angle-brackets (eg, <https://www.youtube.com/watch?v=f5ZQVg-SmWI>) so that discord does not generate a full preview of the link).  Please keep your reply fairly concise and to the point.  Remember - you do not need to mention that you are reading from the context provided - the user will assume that is the case.",
+                "content": os.getenv("DISCORD_BOT_DEFAULT_PROMPT") + "\nThe users will sometimes give you some additional local context based on the transcripts from a podcast. The context will be ordered from most relevant to least relevant. You should use that context over your own knowledge if it is provided as the context is what the user expects to be asking about.  If you use information from the context please reference the show title and show url as this will help the user explore further (please put the show url inside angle-brackets (eg, <https://www.youtube.com/watch?v=f5ZQVg-SmWI>) so that discord does not generate a full preview of the link).  Please keep your reply fairly concise and to the point.  Remember - you do not need to mention that you are reading from the context provided - the user will assume that is the case.",
             },
             {
                 "role": "user",
@@ -365,6 +369,11 @@ async def rerank_results(query: str, results: list[SearchResult]) -> list[Search
                 break
     return ranked_results, cost
 
+async def export_collection_to_json(collection_name: str = "svic-transcripts") -> dict:
+    collection = await get_collection(collection_name)
+    data = await collection.get()
+    return data
+
 def transcript_looks_valid(transcript: str) -> bool:
     """
     Check if the transcript looks valid.
@@ -399,13 +408,26 @@ async def process_transcript(transcript: str, show_title: str = "", url: str = "
     await add_to_chroma(all_chunks)
     return RagResponse(f"Added {len(all_chunks)} chunks to the RAG system.", total_cost)
 
-async def main():
-    with open('transcripts/jordan-thibodeaus-studio_using-ai-to-predict-clinical-trial-success-airpods-pro-2-with-hearing-aid-features-svic-43.txt', "r") as f:
-        transcript = f.read()
-    stats = await process_transcript(transcript, "Show 1234", "https://www.youtube.com/watch?v=f5ZQVg-SmWI")
-    print(stats)
-    response = await query("What did they say about the new AirPods?")
-    print(response)
+async def main(path_to_transcript_files: str):
+    for filename in os.listdir(path_to_transcript_files):
+        with open(os.path.join(path_to_transcript_files, filename), "r") as f:
+            transcript = f.read()
+            print(f"Processing {filename}")
+            lines = transcript.split("\n")
+            show_title = lines[0]
+            url = lines[1]
+            if not url.startswith("https://"):
+                print(f"Skipping {filename} as it does not have a valid URL")
+                continue
+            stats, cost = await process_transcript("\n".join(lines[2:]), show_title, url)
+            print(stats, cost)
+    # response = await query("What did they say about the new AirPods?")
+    # print(response)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # path to transcript files should be passed in as an argument
+    if len(sys.argv) != 2:
+        print("Usage: python gepetto/rag.py <path_to_transcript_files>")
+        sys.exit(1)
+    path_to_transcript_files = sys.argv[1]
+    asyncio.run(main(path_to_transcript_files))
