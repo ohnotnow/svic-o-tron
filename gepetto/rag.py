@@ -286,7 +286,7 @@ async def query(query: str, model=default_model, should_rerank: bool = True, sho
     """
     Perform a general query of the RAG system and return a response from the LLM.
     """
-    results, terms = await search(query, results_limit=10, should_rerank=should_rerank, should_autorag=should_autorag)
+    results, terms = await search(query, results_limit=20, should_rerank=should_rerank, should_autorag=should_autorag)
     context = ""
     for result in results:
         context += f"<context-item>{result.metadata['source']} @ {result.metadata['seconds'] // 60}:{result.metadata['seconds'] % 60}, Link: <{result.metadata['url']}&t={result.metadata['seconds']}> : Distance: {result.distance} : Text: {result.document}</context-item>\n\n"
@@ -328,7 +328,7 @@ async def rerank_results(query: str, results: list[SearchResult]) -> list[Search
     prompt = f"""
     Original user query: "{query}"
 
-    Below are {len(results)} transcript vector database chunks from a podcast about AI, technology and business.
+    Below are {len(results)} vector database chunks from a transcript of a podcast about AI, technology and business.
     Rank these chunks based on their relevance to the user's query.
     Consider context, implied meaning, and overall relevance.  If the chunk does not
     seem relevant or is a duplicate, you should not include it in the rankings.
